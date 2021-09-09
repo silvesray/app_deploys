@@ -1,7 +1,10 @@
-from flask import (render_template, jsonify, make_response, current_app, send_from_directory)
+from flask import (render_template, jsonify, make_response, current_app, send_from_directory, abort)
 from app import app
 import os
 from werkzeug.utils import secure_filename
+import secrets
+from app.tasks import create_image_set
+from app import q
 
 
 @app.route("/")
@@ -52,27 +55,22 @@ def allowed_image_filesize(filesize):
 
 @app.route("/upload-image", methods=["GET", "POST"])
 def upload_image():
+    message = None
     if request.method == "POST":
-        if request.files:
-            if "filesize" in request.cookies:
-                if not allowed_image_filesize(request.cookies["filesize"]):
-                    print("Filesize exceed maximum limit")
-                    return redirect(request.url)
-                images = request.files["image"]
-                
-                if images.filename == "":
-                    print("No filename")
-                    return redirect(request.url)
-                
-                if allowed_image(images.filename):
-                    filename = secure_filename(images.filename)
-                    images.save(os.path.join(current_app.config["IMAGE_UPLOADS"], filename))
-                    print("Image saved")
-                    return redirect(request.url)
-                else:
-                    print("That file extension is not allowed")
-                    return redirect(request.url)
-    return render_template("public/upload_image.html")
+        image = request.files["image"]
+        image_dir_name = secrets.token_hex(16)
+        os.mkdir(os.path.join(app.config["UPLOAD_DIRECTORY"], image_dir_name))
+        image.save(os.path.join(app.config["UPLOAD_DIRECTORY"], image_dir_name, image.filename))
+        image_dir = os.path.join(app.config["UPLOAD_DIRECTORY"], image_dir_name)
+        q.enqueue(create_image_set, image_dir, image.filename)
+        flash("Image uploaded and sent for resizing", "success")
+        message = "/image/{}/{}".format(image_dir_name, image.filename.split('.')[0])
+    return render_template("public/upload_image.html", message=message)
+
+
+@app.route("/image/<dir>/<img>")
+def view_image(dir, img):
+    return render_template("view_image.html", dir=dir, img=img)
 
 
 @app.route("/get-image/<image_name>")
